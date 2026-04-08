@@ -1,5 +1,5 @@
 # api/index.py
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
 import secrets
@@ -10,32 +10,11 @@ CORS(app)
 
 BOT_USERNAME = "moneybulletbot"
 
-# المسار إلى مجلد public (مجلد الملفات الثابتة)
-# Render: المجلد public موجود في نفس مستوى مجلد api
-PUBLIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'public')
-
-# تخزين مؤقت (بدلاً من قاعدة البيانات)
-users = {}              # user_id -> {fingerprint, timestamp}
-fingerprint_to_user = {} # fingerprint -> set of user_ids
-VERIFICATION_TOKENS = {} # token -> {user_id, expires}
-
-# ========== خدمة الملفات الثابتة ==========
-
-@app.route('/')
-def serve_index():
-    """الصفحة الرئيسية - Mini App"""
-    try:
-        return send_from_directory(PUBLIC_DIR, 'index.html')
-    except Exception as e:
-        return jsonify({"error": str(e), "public_dir": PUBLIC_DIR})
-
-@app.route('/<path:path>')
-def serve_static(path):
-    """خدمة الملفات الثابتة الأخرى"""
-    try:
-        return send_from_directory(PUBLIC_DIR, path)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+# ========== تخزين مؤقت (بدلاً من قاعدة البيانات) ==========
+users = {}              # user_id -> {fingerprint, ip, timestamp}
+fingerprint_to_user = {}  # fingerprint -> user_id
+ip_to_user = {}           # ip -> set of user_ids
+VERIFICATION_TOKENS = {}  # token -> {user_id, expires}
 
 # ========== نقاط نهاية API ==========
 
@@ -52,45 +31,76 @@ def check():
         return jsonify({"verified": user_id in users})
     return jsonify({"verified": False})
 
+@app.route('/stats', methods=['GET'])
+def stats():
+    """إحصائيات النظام"""
+    return jsonify({
+        "total_users": len(users),
+        "total_fingerprints": len(fingerprint_to_user),
+        "users": list(users.keys())
+    })
+
 @app.route('/verify', methods=['POST'])
 def verify():
     """التحقق من المستخدم ومنع التعدد"""
     try:
         data = request.get_json()
         if not data:
-            return jsonify({"status": "error", "verified": False, "message": "No data"})
+            return jsonify({"status": "error", "verified": False, "message": "No data provided"})
         
         user_id = str(data.get('user_id'))
         fingerprint = data.get('fingerprint', 'unknown')
+        ip = data.get('ip', 'unknown')
         
-        print(f"📥 Verification request: user_id={user_id}, fingerprint={fingerprint[:20] if fingerprint else 'None'}...")
+        print(f"📥 Verification request: user_id={user_id}, fingerprint={fingerprint[:20] if fingerprint else 'None'}..., ip={ip}")
         
         if not user_id:
-            return jsonify({"status": "error", "verified": False, "message": "No user_id"})
+            return jsonify({"status": "error", "verified": False, "message": "No user_id provided"})
         
-        # منع التعدد: نفس البصمة مع حساب مختلف
-        if fingerprint in fingerprint_to_user:
-            existing_users = fingerprint_to_user[fingerprint]
-            if user_id not in existing_users:
-                print(f"🚫 Blocked: Fingerprint already used by {existing_users}")
+        # ========== نظام منع التعدد ==========
+        
+        # 1. التحقق من وجود نفس البصمة لحساب آخر (الأهم)
+        if fingerprint != 'unknown' and fingerprint in fingerprint_to_user:
+            existing_user = fingerprint_to_user[fingerprint]
+            if existing_user != user_id:
+                print(f"🚫 BLOCKED: Fingerprint {fingerprint[:20]} already used by user {existing_user}")
                 return jsonify({
                     "status": "blocked",
                     "verified": False,
                     "message": "⚠️ هذا الجهاز مسجل بحساب آخر. لا يمكن إنشاء أكثر من حساب."
                 })
         
-        # تسجيل مستخدم جديد
+        # 2. التحقق من وجود نفس IP لحساب آخر (إضافي)
+        if ip != 'unknown' and ip in ip_to_user:
+            if user_id not in ip_to_user[ip] and len(ip_to_user[ip]) >= 1:
+                print(f"🚫 BLOCKED: IP {ip} already used by users {ip_to_user[ip]}")
+                return jsonify({
+                    "status": "blocked",
+                    "verified": False,
+                    "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
+                })
+        
+        # ========== تسجيل المستخدم الجديد ==========
+        
         if user_id not in users:
             users[user_id] = {
                 'fingerprint': fingerprint,
+                'ip': ip,
                 'timestamp': time.time()
             }
-            if fingerprint not in fingerprint_to_user:
-                fingerprint_to_user[fingerprint] = set()
-            fingerprint_to_user[fingerprint].add(user_id)
             print(f"✅ New user registered: {user_id}")
         else:
             print(f"ℹ️ Existing user: {user_id}")
+        
+        # تسجيل البصمة
+        if fingerprint != 'unknown' and fingerprint not in fingerprint_to_user:
+            fingerprint_to_user[fingerprint] = user_id
+        
+        # تسجيل IP
+        if ip != 'unknown':
+            if ip not in ip_to_user:
+                ip_to_user[ip] = set()
+            ip_to_user[ip].add(user_id)
         
         # إنشاء توكن
         token = secrets.token_urlsafe(32)
@@ -109,6 +119,8 @@ def verify():
         
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "verified": False, "message": str(e)})
 
 @app.route('/verify_token/<token>', methods=['GET'])
@@ -121,18 +133,35 @@ def verify_token(token):
         del VERIFICATION_TOKENS[token]
     return jsonify({"valid": False})
 
-@app.route('/stats', methods=['GET'])
-def stats():
-    """إحصائيات المستخدمين"""
+@app.route('/reset', methods=['POST'])
+def reset():
+    """إعادة تعيين جميع البيانات (للمشرفين فقط - للأمان)"""
+    # يمكن إضافة رمز سري هنا
+    global users, fingerprint_to_user, ip_to_user, VERIFICATION_TOKENS
+    users = {}
+    fingerprint_to_user = {}
+    ip_to_user = {}
+    VERIFICATION_TOKENS = {}
+    return jsonify({"status": "success", "message": "All data reset"})
+
+@app.route('/', methods=['GET'])
+def home():
     return jsonify({
-        "total_users": len(users),
-        "total_fingerprints": len(fingerprint_to_user),
-        "users": list(users.keys())
+        "status": "ok",
+        "bot": BOT_USERNAME,
+        "message": "Verification API is running",
+        "endpoints": [
+            "POST /verify - Send verification data",
+            "GET /check?user_id=xxx - Check user status",
+            "GET /health - Health check",
+            "GET /stats - Statistics",
+            "POST /reset - Reset all data"
+        ]
     })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Running on http://localhost:{port}")
-    print(f"📁 Public directory: {PUBLIC_DIR}")
     print(f"📱 Bot username: {BOT_USERNAME}")
+    print(f"🔒 Anti-multi account system is ACTIVE")
     app.run(host='0.0.0.0', port=port, debug=False)

@@ -100,15 +100,28 @@
             } catch { return 'unknown'; }
         }
 
+        // 🔴🔴🔴 بصمة جهاز أقوى وأكثر دقة 🔴🔴🔴
         function getFingerprint() {
             const components = [
-                screen.width + 'x' + screen.height, screen.colorDepth, navigator.language,
-                navigator.platform, navigator.hardwareConcurrency, navigator.deviceMemory || 'unknown',
-                new Date().getTimezoneOffset(), navigator.userAgent
+                screen.width + 'x' + screen.height,
+                screen.colorDepth,
+                navigator.language,
+                navigator.platform,
+                navigator.hardwareConcurrency || 'unknown',
+                navigator.deviceMemory || 'unknown',
+                new Date().getTimezoneOffset(),
+                navigator.userAgent,
+                // معلومات إضافية
+                !!window.chrome,
+                !!navigator.webdriver,
+                screen.pixelDepth,
+                navigator.maxTouchPoints || 0
             ];
+            
             let hash = 0;
-            for (let i = 0; i < components.join('|').length; i++) {
-                const char = components.join('|').charCodeAt(i);
+            const str = components.join('|');
+            for (let i = 0; i < str.length; i++) {
+                const char = str.charCodeAt(i);
                 hash = ((hash << 5) - hash) + char;
                 hash = hash & hash;
             }
@@ -127,11 +140,15 @@
             const ip = await getIP();
             const fingerprint = getFingerprint();
 
+            console.log("Fingerprint:", fingerprint);
+            console.log("User ID:", user_id);
+            console.log("IP:", ip);
+
             content.innerHTML = `
                 <div class="ip-box">
                     <div>معرف المستخدم: ${user_id}</div>
                     <div class="ip-address">${ip}</div>
-                    <div style="font-size:12px;margin-top:10px;">بصمة: ${fingerprint.substring(0,16)}...</div>
+                    <div style="font-size:12px;margin-top:10px;">بصمة: ${fingerprint.substring(0,20)}...</div>
                 </div>
                 <div class="spinner"></div>
                 <p>جاري إرسال البيانات...</p>
@@ -141,9 +158,15 @@
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id, ip, fingerprint, timestamp: Date.now() })
+                    body: JSON.stringify({ 
+                        user_id: user_id, 
+                        ip: ip, 
+                        fingerprint: fingerprint,
+                        timestamp: Date.now()
+                    })
                 });
                 const result = await response.json();
+                console.log("API Response:", result);
 
                 if (result.status === 'success' && result.verified === true) {
                     content.innerHTML = `
@@ -152,6 +175,7 @@
                         <div class="ip-box"><div class="ip-address">${ip}</div></div>
                         <button class="button" onclick="tg.close()">العودة للبوت</button>
                     `;
+                    setTimeout(() => tg.close(), 2000);
                 } else if (result.status === 'blocked') {
                     content.innerHTML = `
                         <div class="blocked-icon">⚠️</div>
@@ -163,6 +187,7 @@
                     throw new Error(result.message || 'فشل التحقق');
                 }
             } catch (error) {
+                console.error("Error:", error);
                 content.innerHTML = `
                     <div class="error-icon">❌</div>
                     <h3>فشل التحقق</h3>
