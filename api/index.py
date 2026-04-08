@@ -18,18 +18,26 @@ BOT_USERNAME = "moneybulletbot"
 # Render يسمح بالكتابة في هذا المسار
 DB_PATH = '/opt/render/project/src/verified.db'
 
+# محاولة استخدام مسار بديل إذا فشل الأول
+if not os.path.exists(os.path.dirname(DB_PATH)):
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'verified.db')
+
 def init_db():
     """إنشاء قاعدة البيانات إذا لم تكن موجودة"""
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS verified_users
-                     (user_id INTEGER PRIMARY KEY, 
-                      timestamp INTEGER,
-                      ip TEXT,
-                      fingerprint TEXT,
-                      device_info TEXT,
-                      browser TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS verified_users (
+            user_id INTEGER PRIMARY KEY,
+            timestamp INTEGER,
+            ip TEXT,
+            fingerprint TEXT,
+            device_info TEXT,
+            browser TEXT,
+            screen_resolution TEXT,
+            timezone TEXT,
+            language TEXT
+        )''')
         conn.commit()
         conn.close()
         print(f"✅ Database initialized successfully at {DB_PATH}")
@@ -49,13 +57,15 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def add_verified_user(user_id, ip=None, fingerprint=None, device_info=None, browser=None):
+def add_verified_user(user_id, ip=None, fingerprint=None, device_info=None, browser=None, screen_resolution=None, timezone=None, language=None):
     """إضافة مستخدم موثق إلى قاعدة البيانات"""
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO verified_users (user_id, timestamp, ip, fingerprint, device_info, browser) VALUES (?, ?, ?, ?, ?, ?)",
-                  (user_id, int(time.time()), ip, fingerprint, device_info, browser))
+        c.execute("""INSERT OR REPLACE INTO verified_users 
+                     (user_id, timestamp, ip, fingerprint, device_info, browser, screen_resolution, timezone, language) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  (user_id, int(time.time()), ip, fingerprint, device_info, browser, screen_resolution, timezone, language))
         conn.commit()
         conn.close()
         print(f"✅ User {user_id} added to database")
@@ -112,7 +122,7 @@ def get_all_users():
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT user_id, timestamp, ip, fingerprint FROM verified_users ORDER BY timestamp DESC")
+        c.execute("SELECT user_id, timestamp, ip, fingerprint FROM verified_users ORDER BY timestamp DESC LIMIT 50")
         results = c.fetchall()
         conn.close()
         return results
@@ -139,9 +149,12 @@ def stats():
 def check():
     user_id = request.args.get('user_id')
     if user_id:
-        verified = is_verified(int(user_id))
-        return jsonify({"verified": verified})
-    return jsonify({"verified": False, "error": "No user_id"})
+        try:
+            verified = is_verified(int(user_id))
+            return jsonify({"verified": verified})
+        except ValueError:
+            return jsonify({"verified": False, "error": "Invalid user_id"})
+    return jsonify({"verified": False, "error": "No user_id provided"})
 
 @app.route('/verify_token/<token>', methods=['GET'])
 def verify_token_route(token):
@@ -164,15 +177,21 @@ def verify():
         fingerprint = data.get('fingerprint', 'unknown')
         device_info = data.get('device_info', '')
         browser = data.get('browser', '')
+        screen_resolution = data.get('screen_resolution', '')
+        timezone = data.get('timezone', '')
+        language = data.get('language', '')
         
         print(f"📥 Verification request: user_id={user_id}, fingerprint={fingerprint[:20] if fingerprint else 'None'}...")
         
         if not user_id:
-            return jsonify({"status": "error", "verified": False, "message": "No user_id"})
+            return jsonify({"status": "error", "verified": False, "message": "No user_id provided"})
         
-        # نظام منع التعدد
+        # ========== نظام منع التعدد ==========
+        
+        # 1. التحقق من وجود مستخدم آخر بنفس IP
         existing_ip_user = get_user_by_ip(ip, user_id)
         if existing_ip_user:
+            print(f"🚫 Blocked: IP {ip} already used by user {existing_ip_user}")
             return jsonify({
                 "status": "blocked",
                 "verified": False,
@@ -180,8 +199,10 @@ def verify():
                 "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
             })
         
+        # 2. التحقق من وجود مستخدم آخر بنفس البصمة (الأهم)
         existing_fp_user = get_user_by_fingerprint(fingerprint, user_id)
         if existing_fp_user and fingerprint != 'unknown':
+            print(f"🚫 Blocked: Fingerprint already used by user {existing_fp_user}")
             return jsonify({
                 "status": "blocked",
                 "verified": False,
@@ -189,10 +210,17 @@ def verify():
                 "message": "⚠️ تم اكتشاف أكثر من حساب من نفس الجهاز. مسموح بحساب واحد فقط."
             })
         
-        add_verified_user(int(user_id), ip, fingerprint, device_info, browser)
+        # 3. تسجيل المستخدم الجديد
+        add_verified_user(int(user_id), ip, fingerprint, device_info, browser, screen_resolution, timezone, language)
         
+        # 4. إنشاء توكن
         token = secrets.token_urlsafe(32)
-        VERIFICATION_TOKENS[token] = {'user_id': user_id, 'expires': time.time() + 600}
+        VERIFICATION_TOKENS[token] = {
+            'user_id': user_id,
+            'expires': time.time() + 600  # 10 دقائق
+        }
+        
+        print(f"✅ User {user_id} verified successfully")
         
         return jsonify({
             "status": "success",
@@ -218,6 +246,7 @@ def serve_static(path):
     return send_from_directory('../public', path)
 
 if __name__ == '__main__':
-    print(f"🚀 تشغيل الخدمة على http://localhost:5000")
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🚀 تشغيل الخدمة على http://localhost:{port}")
     print(f"📱 اسم البوت: {BOT_USERNAME}")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)
