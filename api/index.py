@@ -8,19 +8,15 @@ import os
 import json
 from datetime import datetime
 
-app = Flask(__name__, static_folder='../public', static_url_path='')
+app = Flask(__name__)
 CORS(app)
 
 # ========== إعدادات البوت ==========
 BOT_USERNAME = "moneybulletbot"
 
 # ========== قاعدة البيانات ==========
-# Render يسمح بالكتابة في هذا المسار
-DB_PATH = '/opt/render/project/src/verified.db'
-
-# محاولة استخدام مسار بديل إذا فشل الأول
-if not os.path.exists(os.path.dirname(DB_PATH)):
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'verified.db')
+# استخدام مسار آمن للكتابة على Render
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'verified.db')
 
 def init_db():
     """إنشاء قاعدة البيانات إذا لم تكن موجودة"""
@@ -186,9 +182,7 @@ def verify():
         if not user_id:
             return jsonify({"status": "error", "verified": False, "message": "No user_id provided"})
         
-        # ========== نظام منع التعدد ==========
-        
-        # 1. التحقق من وجود مستخدم آخر بنفس IP
+        # نظام منع التعدد
         existing_ip_user = get_user_by_ip(ip, user_id)
         if existing_ip_user:
             print(f"🚫 Blocked: IP {ip} already used by user {existing_ip_user}")
@@ -199,7 +193,6 @@ def verify():
                 "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
             })
         
-        # 2. التحقق من وجود مستخدم آخر بنفس البصمة (الأهم)
         existing_fp_user = get_user_by_fingerprint(fingerprint, user_id)
         if existing_fp_user and fingerprint != 'unknown':
             print(f"🚫 Blocked: Fingerprint already used by user {existing_fp_user}")
@@ -210,14 +203,12 @@ def verify():
                 "message": "⚠️ تم اكتشاف أكثر من حساب من نفس الجهاز. مسموح بحساب واحد فقط."
             })
         
-        # 3. تسجيل المستخدم الجديد
         add_verified_user(int(user_id), ip, fingerprint, device_info, browser, screen_resolution, timezone, language)
         
-        # 4. إنشاء توكن
         token = secrets.token_urlsafe(32)
         VERIFICATION_TOKENS[token] = {
             'user_id': user_id,
-            'expires': time.time() + 600  # 10 دقائق
+            'expires': time.time() + 600
         }
         
         print(f"✅ User {user_id} verified successfully")
@@ -237,13 +228,21 @@ def verify():
         traceback.print_exc()
         return jsonify({"status": "error", "verified": False, "message": str(e)})
 
+# ========== الصفحة الرئيسية ==========
 @app.route('/', methods=['GET'])
 def home():
-    return send_from_directory('../public', 'index.html')
-
-@app.route('/<path:path>', methods=['GET'])
-def serve_static(path):
-    return send_from_directory('../public', path)
+    return jsonify({
+        "status": "ok",
+        "bot": BOT_USERNAME,
+        "message": "Verification API is running",
+        "endpoints": [
+            "GET /health",
+            "GET /stats",
+            "GET /check?user_id=xxx",
+            "GET /verify_token/<token>",
+            "POST /verify"
+        ]
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
