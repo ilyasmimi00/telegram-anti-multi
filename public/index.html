@@ -47,7 +47,6 @@
         .status.loading { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; }
         .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .status.warning { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -127,35 +126,14 @@
         webApp.ready();
         webApp.expand();
         
-        // الحصول على بصمة الجهاز
         async function getFingerprint() {
             try {
                 const fp = await FingerprintJS.load();
                 const result = await fp.get();
                 return result.visitorId;
             } catch (error) {
-                console.error("Fingerprint error:", error);
-                return generateSimpleFingerprint();
+                return 'simple_' + Date.now();
             }
-        }
-        
-        function generateSimpleFingerprint() {
-            const data = [
-                navigator.userAgent,
-                screen.width + 'x' + screen.height,
-                screen.colorDepth,
-                navigator.language,
-                navigator.hardwareConcurrency || 'unknown',
-                Intl.DateTimeFormat().resolvedOptions().timeZone
-            ].join('|');
-            
-            let hash = 0;
-            for (let i = 0; i < data.length; i++) {
-                const char = data.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash = hash & hash;
-            }
-            return Math.abs(hash).toString(16);
         }
         
         async function getIP() {
@@ -164,7 +142,7 @@
                 const data = await response.json();
                 return data.ip;
             } catch {
-                return 'غير معروف';
+                return 'unknown';
             }
         }
         
@@ -174,8 +152,7 @@
             if (/Android/i.test(ua)) return 'Android';
             if (/Windows/i.test(ua)) return 'Windows';
             if (/Mac/i.test(ua)) return 'macOS';
-            if (/Linux/i.test(ua)) return 'Linux';
-            return 'غير معروف';
+            return 'unknown';
         }
         
         function getBrowserInfo() {
@@ -183,9 +160,7 @@
             if (ua.includes('Chrome')) return 'Chrome';
             if (ua.includes('Firefox')) return 'Firefox';
             if (ua.includes('Safari')) return 'Safari';
-            if (ua.includes('Edge')) return 'Edge';
-            if (ua.includes('Opera')) return 'Opera';
-            return 'غير معروف';
+            return 'unknown';
         }
         
         async function verifyAndSend() {
@@ -198,12 +173,9 @@
             
             try {
                 const user = webApp.initDataUnsafe?.user;
-                
                 if (!user || !user.id) {
                     throw new Error('الرجاء فتح هذه الصفحة من داخل تطبيق Telegram');
                 }
-                
-                console.log("Sending request to /verify...");
                 
                 const response = await fetch('/verify', {
                     method: 'POST',
@@ -213,44 +185,19 @@
                         ip: deviceData.ip,
                         fingerprint: deviceData.fingerprint,
                         device_info: deviceData.deviceInfo,
-                        browser: deviceData.browser,
-                        screen_resolution: `${screen.width}x${screen.height}`,
-                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                        language: navigator.language
+                        browser: deviceData.browser
                     })
                 });
                 
-                console.log("Response status:", response.status);
-                
-                // ✅ التحقق من صحة الاستجابة
-                if (!response.ok) {
-                    throw new Error(`Server error: ${response.status}`);
-                }
-                
-                // ✅ قراءة النص أولاً لتجنب خطأ JSON
-                const text = await response.text();
-                console.log("Response text:", text);
-                
-                if (!text || text.trim() === '') {
-                    throw new Error('Empty response from server');
-                }
-                
-                // ✅ تحويل النص إلى JSON
-                const result = JSON.parse(text);
-                console.log("Parsed result:", result);
+                const result = await response.json();
                 
                 if (result.status === "success" && result.verified === true) {
                     statusDiv.className = 'status success';
                     statusDiv.innerHTML = '✅ تم التحقق بنجاح! جاري تحويلك...';
-                    
-                    // إغلاق WebApp
                     webApp.close();
-                    
-                    // إرسال المستخدم إلى البوت
                     setTimeout(() => {
                         window.location.href = `https://t.me/${result.bot_username}?start=verified_${user.id}_${result.token}`;
                     }, 1000);
-                    
                 } else if (result.status === "blocked") {
                     statusDiv.className = 'status error';
                     statusDiv.innerHTML = `🚫 ${result.message}`;
@@ -258,9 +205,7 @@
                 } else {
                     throw new Error(result.message || 'فشل التحقق');
                 }
-                
             } catch (error) {
-                console.error("Error:", error);
                 statusDiv.className = 'status error';
                 statusDiv.innerHTML = `❌ خطأ: ${error.message}`;
                 btn.disabled = false;
@@ -268,9 +213,6 @@
         }
         
         async function init() {
-            const statusDiv = document.getElementById('status');
-            const btn = document.getElementById('verifyBtn');
-            
             try {
                 deviceData.fingerprint = await getFingerprint();
                 deviceData.ip = await getIP();
@@ -282,13 +224,12 @@
                 document.getElementById('device').textContent = deviceData.deviceInfo;
                 document.getElementById('browser').textContent = deviceData.browser;
                 
-                statusDiv.className = 'status success';
-                statusDiv.innerHTML = '✅ تم جمع معلومات جهازك بنجاح';
-                btn.disabled = false;
+                document.getElementById('status').className = 'status success';
+                document.getElementById('status').innerHTML = '✅ تم جمع معلومات جهازك بنجاح';
+                document.getElementById('verifyBtn').disabled = false;
             } catch (error) {
-                statusDiv.className = 'status error';
-                statusDiv.innerHTML = `❌ خطأ: ${error.message}`;
-                console.error(error);
+                document.getElementById('status').className = 'status error';
+                document.getElementById('status').innerHTML = `❌ خطأ: ${error.message}`;
             }
         }
         
