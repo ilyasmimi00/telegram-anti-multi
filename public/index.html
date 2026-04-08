@@ -177,9 +177,13 @@
                     throw new Error('الرجاء فتح هذه الصفحة من داخل تطبيق Telegram');
                 }
                 
+                console.log('Sending POST request to /verify');
+                
                 const response = await fetch('/verify', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify({
                         user_id: user.id,
                         ip: deviceData.ip,
@@ -189,7 +193,14 @@
                     })
                 });
                 
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const result = await response.json();
+                console.log('Response data:', result);
                 
                 if (result.status === "success" && result.verified === true) {
                     statusDiv.className = 'status success';
@@ -206,6 +217,7 @@
                     throw new Error(result.message || 'فشل التحقق');
                 }
             } catch (error) {
+                console.error('Error:', error);
                 statusDiv.className = 'status error';
                 statusDiv.innerHTML = `❌ خطأ: ${error.message}`;
                 btn.disabled = false;
@@ -228,6 +240,7 @@
                 document.getElementById('status').innerHTML = '✅ تم جمع معلومات جهازك بنجاح';
                 document.getElementById('verifyBtn').disabled = false;
             } catch (error) {
+                console.error('Init error:', error);
                 document.getElementById('status').className = 'status error';
                 document.getElementById('status').innerHTML = `❌ خطأ: ${error.message}`;
             }

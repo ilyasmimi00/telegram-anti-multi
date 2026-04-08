@@ -28,23 +28,18 @@ def init_db():
             ip TEXT,
             fingerprint TEXT,
             device_info TEXT,
-            browser TEXT,
-            screen_resolution TEXT,
-            timezone TEXT,
-            language TEXT
+            browser TEXT
         )''')
         conn.commit()
         conn.close()
-        print(f"✅ Database initialized successfully at {DB_PATH}")
+        print(f"✅ Database initialized at {DB_PATH}")
         return True
     except Exception as e:
         print(f"❌ Database init error: {e}")
         return False
 
-# تهيئة قاعدة البيانات
 init_db()
 
-# تخزين مؤقت للتوكنات
 VERIFICATION_TOKENS = {}
 
 def get_db():
@@ -52,25 +47,21 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def add_verified_user(user_id, ip=None, fingerprint=None, device_info=None, browser=None, screen_resolution=None, timezone=None, language=None):
-    """إضافة مستخدم موثق إلى قاعدة البيانات"""
+def add_verified_user(user_id, ip=None, fingerprint=None, device_info=None, browser=None):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("""INSERT OR REPLACE INTO verified_users 
-                     (user_id, timestamp, ip, fingerprint, device_info, browser, screen_resolution, timezone, language) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                  (user_id, int(time.time()), ip, fingerprint, device_info, browser, screen_resolution, timezone, language))
+        c.execute("INSERT OR REPLACE INTO verified_users (user_id, timestamp, ip, fingerprint, device_info, browser) VALUES (?, ?, ?, ?, ?, ?)",
+                  (user_id, int(time.time()), ip, fingerprint, device_info, browser))
         conn.commit()
         conn.close()
-        print(f"✅ User {user_id} added to database")
+        print(f"✅ User {user_id} added")
         return True
     except Exception as e:
-        print(f"❌ Error adding user {user_id}: {e}")
+        print(f"❌ Error adding user: {e}")
         return False
 
 def is_verified(user_id):
-    """التحقق من وجود مستخدم في قاعدة البيانات"""
     try:
         conn = get_db()
         c = conn.cursor()
@@ -78,27 +69,10 @@ def is_verified(user_id):
         result = c.fetchone() is not None
         conn.close()
         return result
-    except Exception as e:
-        print(f"❌ Error checking user {user_id}: {e}")
+    except:
         return False
 
-def get_user_by_ip(ip, current_user_id):
-    """البحث عن مستخدم بنفس IP (باستثناء المستخدم الحالي)"""
-    if not ip or ip == 'unknown':
-        return None
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM verified_users WHERE ip = ? AND user_id != ?", (ip, current_user_id))
-        result = c.fetchone()
-        conn.close()
-        return result['user_id'] if result else None
-    except Exception as e:
-        print(f"❌ Error checking IP {ip}: {e}")
-        return None
-
 def get_user_by_fingerprint(fingerprint, current_user_id):
-    """البحث عن مستخدم بنفس البصمة (باستثناء المستخدم الحالي)"""
     if not fingerprint or fingerprint == 'unknown':
         return None
     try:
@@ -108,29 +82,15 @@ def get_user_by_fingerprint(fingerprint, current_user_id):
         result = c.fetchone()
         conn.close()
         return result['user_id'] if result else None
-    except Exception as e:
-        print(f"❌ Error checking fingerprint {fingerprint}: {e}")
+    except:
         return None
 
-def get_all_users():
-    """الحصول على جميع المستخدمين (للتشخيص)"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT user_id, timestamp, ip, fingerprint FROM verified_users ORDER BY timestamp DESC LIMIT 50")
-        results = c.fetchall()
-        conn.close()
-        return results
-    except Exception as e:
-        print(f"❌ Error getting users: {e}")
-        return []
 
-
-# ========== نقاط النهاية (Endpoints) ==========
+# ========== نقاط النهاية ==========
 
 @app.route('/', methods=['GET'])
 def home():
-    """الصفحة الرئيسية - Mini App"""
+    """إرجاع صفحة Mini App"""
     try:
         return send_from_directory('../public', 'index.html')
     except:
@@ -150,14 +110,6 @@ def home():
 def health():
     return jsonify({"status": "ok", "timestamp": time.time()})
 
-@app.route('/stats', methods=['GET'])
-def stats():
-    users = get_all_users()
-    return jsonify({
-        "total_users": len(users),
-        "users": [{"user_id": u['user_id'], "timestamp": u['timestamp'], "ip": u['ip'], "fingerprint": u['fingerprint'][:20] + "..." if u['fingerprint'] else None} for u in users]
-    })
-
 @app.route('/check', methods=['GET'])
 def check():
     user_id = request.args.get('user_id')
@@ -166,8 +118,8 @@ def check():
             verified = is_verified(int(user_id))
             return jsonify({"verified": verified})
         except ValueError:
-            return jsonify({"verified": False, "error": "Invalid user_id"})
-    return jsonify({"verified": False, "error": "No user_id provided"})
+            return jsonify({"verified": False})
+    return jsonify({"verified": False})
 
 @app.route('/verify_token/<token>', methods=['GET'])
 def verify_token_route(token):
@@ -178,21 +130,9 @@ def verify_token_route(token):
         del VERIFICATION_TOKENS[token]
     return jsonify({"valid": False})
 
-@app.route('/verify', methods=['POST', 'GET'])
+@app.route('/verify', methods=['POST'])
 def verify():
-    # GET request - معلومات عن API
-    if request.method == 'GET':
-        return jsonify({
-            "status": "info",
-            "message": "Send POST request with user_id, ip, fingerprint",
-            "example": {
-                "user_id": 123456,
-                "ip": "1.2.3.4",
-                "fingerprint": "abc123"
-            }
-        })
-    
-    # POST request - التحقق الفعلي
+    """نقطة التحقق الرئيسية - فقط POST"""
     try:
         data = request.get_json()
         if not data:
@@ -203,32 +143,15 @@ def verify():
         fingerprint = data.get('fingerprint', 'unknown')
         device_info = data.get('device_info', '')
         browser = data.get('browser', '')
-        screen_resolution = data.get('screen_resolution', '')
-        timezone = data.get('timezone', '')
-        language = data.get('language', '')
         
-        print(f"📥 Verification request: user_id={user_id}, fingerprint={fingerprint[:20] if fingerprint else 'None'}...")
+        print(f"📥 Verification: user={user_id}, fp={fingerprint[:20] if fingerprint else 'None'}...")
         
         if not user_id:
-            return jsonify({"status": "error", "verified": False, "message": "No user_id provided"})
+            return jsonify({"status": "error", "verified": False, "message": "No user_id"})
         
-        # ========== نظام منع التعدد ==========
-        
-        # 1. التحقق من وجود مستخدم آخر بنفس IP
-        existing_ip_user = get_user_by_ip(ip, user_id)
-        if existing_ip_user:
-            print(f"🚫 Blocked: IP {ip} already used by user {existing_ip_user}")
-            return jsonify({
-                "status": "blocked",
-                "verified": False,
-                "reason": "multiple_accounts_same_ip",
-                "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
-            })
-        
-        # 2. التحقق من وجود مستخدم آخر بنفس البصمة (الأهم)
+        # منع التعدد عبر البصمة
         existing_fp_user = get_user_by_fingerprint(fingerprint, user_id)
         if existing_fp_user and fingerprint != 'unknown':
-            print(f"🚫 Blocked: Fingerprint already used by user {existing_fp_user}")
             return jsonify({
                 "status": "blocked",
                 "verified": False,
@@ -236,35 +159,27 @@ def verify():
                 "message": "⚠️ تم اكتشاف أكثر من حساب من نفس الجهاز. مسموح بحساب واحد فقط."
             })
         
-        # 3. تسجيل المستخدم الجديد
-        add_verified_user(int(user_id), ip, fingerprint, device_info, browser, screen_resolution, timezone, language)
+        add_verified_user(int(user_id), ip, fingerprint, device_info, browser)
         
-        # 4. إنشاء توكن
         token = secrets.token_urlsafe(32)
         VERIFICATION_TOKENS[token] = {
             'user_id': user_id,
-            'expires': time.time() + 600  # 10 دقائق
+            'expires': time.time() + 600
         }
-        
-        print(f"✅ User {user_id} verified successfully")
         
         return jsonify({
             "status": "success",
             "verified": True,
             "user_id": user_id,
             "token": token,
-            "bot_username": BOT_USERNAME,
-            "message": "User verified successfully"
+            "bot_username": BOT_USERNAME
         })
         
     except Exception as e:
         print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"status": "error", "verified": False, "message": str(e)})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 تشغيل الخدمة على http://localhost:{port}")
-    print(f"📱 اسم البوت: {BOT_USERNAME}")
+    print(f"🚀 Running on http://localhost:{port}")
     app.run(host='0.0.0.0', port=port, debug=False)
