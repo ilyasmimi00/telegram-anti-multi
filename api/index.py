@@ -1,126 +1,165 @@
 # api/index.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import sqlite3
 import time
-import secrets
 import os
 
 app = Flask(__name__)
 CORS(app)
 
+# تخزين بيانات المستخدمين (في الذاكرة - ستفقد عند إعادة التشغيل)
+# للإنتاج، استخدم قاعدة بيانات SQLite
+users = {}  # user_id -> {ip, fingerprint, timestamp}
+ip_to_user = {}  # ip -> set of user_ids
+fingerprint_to_user = {}  # fingerprint -> set of user_ids
+
 BOT_USERNAME = "moneybulletbot"
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'verified.db')
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS verified_users (
-        user_id INTEGER PRIMARY KEY,
-        timestamp INTEGER,
-        ip TEXT,
-        fingerprint TEXT
-    )''')
-    conn.commit()
-    conn.close()
+def init_storage():
+    """تهيئة التخزين"""
+    global users, ip_to_user, fingerprint_to_user
+    users = {}
+    ip_to_user = {}
+    fingerprint_to_user = {}
 
-init_db()
-VERIFICATION_TOKENS = {}
+@app.route('/health', methods=['GET'])
+def health():
+    """نقطة نهاية للتحقق من صحة الخدمة"""
+    return jsonify({"status": "ok", "timestamp": time.time()})
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def add_verified_user(user_id, ip=None, fingerprint=None):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO verified_users (user_id, timestamp, ip, fingerprint) VALUES (?, ?, ?, ?)",
-                  (user_id, int(time.time()), ip, fingerprint))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return False
-
-def is_verified(user_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT 1 FROM verified_users WHERE user_id = ?", (user_id,))
-        result = c.fetchone() is not None
-        conn.close()
-        return result
-    except:
-        return False
-
-def get_user_by_fingerprint(fingerprint, current_user_id):
-    if not fingerprint:
-        return None
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM verified_users WHERE fingerprint = ? AND user_id != ?", (fingerprint, current_user_id))
-        result = c.fetchone()
-        conn.close()
-        return result['user_id'] if result else None
-    except:
-        return None
+@app.route('/check', methods=['GET'])
+def check():
+    """التحقق من حالة المستخدم"""
+    user_id = request.args.get('user_id')
+    if user_id:
+        verified = user_id in users
+        return jsonify({"verified": verified})
+    return jsonify({"verified": False})
 
 @app.route('/verify', methods=['POST'])
 def verify():
+    """معالجة طلب التحقق ومنع التعدد"""
     try:
         data = request.get_json()
         if not data:
             return jsonify({"status": "error", "verified": False, "message": "No data"})
         
-        user_id = data.get('user_id')
+        user_id = str(data.get('user_id'))
         ip = data.get('ip', 'unknown')
         fingerprint = data.get('fingerprint', 'unknown')
+        user_agent = data.get('user_agent', 'unknown')
+        timestamp = data.get('timestamp', int(time.time()))
         
-        if not user_id:
-            return jsonify({"status": "error", "verified": False, "message": "No user_id"})
+        print(f"📥 Verification request: user={user_id}, ip={ip}, fingerprint={fingerprint[:20] if fingerprint else 'None'}...")
         
-        existing = get_user_by_fingerprint(fingerprint, user_id)
-        if existing:
+        # التحقق من صحة البيانات
+        if ip == 'unknown' or fingerprint == 'unknown':
             return jsonify({
-                "status": "blocked",
+                "status": "error",
                 "verified": False,
-                "message": "⚠️ هذا الجهاز مسجل بحساب آخر. لا يمكن إنشاء أكثر من حساب."
+                "message": "Invalid device data"
             })
         
-        add_verified_user(int(user_id), ip, fingerprint)
+        # فحص التعدد: نفس IP مع حساب مختلف
+        if ip in ip_to_user:
+            existing_users = ip_to_user[ip]
+            if user_id not in existing_users and len(existing_users) >= 1:
+                print(f"🚫 BLOCKED: Multiple accounts from same IP {ip}: {existing_users} + {user_id}")
+                return jsonify({
+                    "status": "blocked",
+                    "verified": False,
+                    "reason": "multiple_accounts_same_ip",
+                    "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
+                })
+        
+        # فحص التعدد: نفس بصمة الجهاز مع حساب مختلف
+        if fingerprint in fingerprint_to_user:
+            existing_fp_users = fingerprint_to_user[fingerprint]
+            if user_id not in existing_fp_users and len(existing_fp_users) >= 1:
+                print(f"🚫 BLOCKED: Multiple accounts from same device {fingerprint[:20]}: {existing_fp_users} + {user_id}")
+                return jsonify({
+                    "status": "blocked",
+                    "verified": False,
+                    "reason": "multiple_accounts_same_device",
+                    "message": "⚠️ تم اكتشاف أكثر من حساب من نفس الجهاز. مسموح بحساب واحد فقط."
+                })
+        
+        # تسجيل المستخدم الجديد
+        if user_id not in users:
+            users[user_id] = {
+                'ip': ip,
+                'fingerprint': fingerprint,
+                'user_agent': user_agent,
+                'timestamp': timestamp
+            }
+            if ip not in ip_to_user:
+                ip_to_user[ip] = set()
+            ip_to_user[ip].add(user_id)
+            
+            if fingerprint not in fingerprint_to_user:
+                fingerprint_to_user[fingerprint] = set()
+            fingerprint_to_user[fingerprint].add(user_id)
+            print(f"✅ New user registered: {user_id}")
+        else:
+            print(f"ℹ️ Existing user: {user_id}")
+        
+        # إنشاء توكن (للتكامل مع البوت)
+        import secrets
         token = secrets.token_urlsafe(32)
-        VERIFICATION_TOKENS[token] = {'user_id': user_id, 'expires': time.time() + 600}
         
         return jsonify({
             "status": "success",
             "verified": True,
+            "user_id": user_id,
             "token": token,
             "bot_username": BOT_USERNAME
         })
+        
     except Exception as e:
+        print(f"❌ Error: {e}")
         return jsonify({"status": "error", "verified": False, "message": str(e)})
 
 @app.route('/verify_token/<token>', methods=['GET'])
 def verify_token(token):
-    if token in VERIFICATION_TOKENS:
-        if time.time() < VERIFICATION_TOKENS[token]['expires']:
-            return jsonify({"valid": True, "user_id": VERIFICATION_TOKENS[token]['user_id']})
+    """التحقق من صحة التوكن (للتكامل مع البوت)"""
+    # تخزين مؤقت بسيط
+    if token in verify_token.tokens:
+        token_data = verify_token.tokens[token]
+        if time.time() < token_data['expires']:
+            return jsonify({"valid": True, "user_id": token_data['user_id']})
     return jsonify({"valid": False})
 
-@app.route('/check', methods=['GET'])
-def check():
-    user_id = request.args.get('user_id')
-    if user_id:
-        return jsonify({"verified": is_verified(int(user_id))})
-    return jsonify({"verified": False})
+# تخزين مؤقت للتوكنات
+verify_token.tokens = {}
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok"})
+# إضافة التوكن عند التحقق الناجح
+original_verify = verify
+def verify_with_token():
+    response = original_verify()
+    if response.status_code == 200 and response.json.get('verified'):
+        token = secrets.token_urlsafe(32)
+        verify_token.tokens[token] = {
+            'user_id': response.json['user_id'],
+            'expires': time.time() + 600
+        }
+        response.json['token'] = token
+    return response
+
+@app.route('/', methods=['GET'])
+def home():
+    """الصفحة الرئيسية"""
+    return jsonify({
+        "status": "ok",
+        "bot": BOT_USERNAME,
+        "message": "Verification API is running",
+        "endpoints": [
+            "POST /verify - Send verification data",
+            "GET /check?user_id=xxx - Check user status",
+            "GET /health - Health check"
+        ]
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    print(f"🚀 Running on http://localhost:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
