@@ -72,18 +72,14 @@
 <body>
     <div class="container">
         <h2>🔐 التحقق من الجهاز</h2>
-        <div id="content">
-            <div class="spinner"></div>
-            <p>جاري التحقق...</p>
-        </div>
+        <div id="content"><div class="spinner"></div><p>جاري التحقق...</p></div>
     </div>
-
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
 
-        const API_URL = "https://telegram-anti-multi.onrender.com/verify";
+        const API_URL = window.location.origin + "/verify";
 
         function getUserId() {
             let user_id = tg.initDataUnsafe?.user?.id;
@@ -100,7 +96,6 @@
             } catch { return 'unknown'; }
         }
 
-        // 🔴🔴🔴 بصمة جهاز أقوى وأكثر دقة 🔴🔴🔴
         function getFingerprint() {
             const components = [
                 screen.width + 'x' + screen.height,
@@ -111,19 +106,15 @@
                 navigator.deviceMemory || 'unknown',
                 new Date().getTimezoneOffset(),
                 navigator.userAgent,
-                // معلومات إضافية
                 !!window.chrome,
                 !!navigator.webdriver,
                 screen.pixelDepth,
                 navigator.maxTouchPoints || 0
             ];
-            
             let hash = 0;
             const str = components.join('|');
             for (let i = 0; i < str.length; i++) {
-                const char = str.charCodeAt(i);
-                hash = ((hash << 5) - hash) + char;
-                hash = hash & hash;
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
             }
             return Math.abs(hash).toString(16);
         }
@@ -133,16 +124,12 @@
             const user_id = getUserId();
             
             if (!user_id) {
-                content.innerHTML = `<div class="error-icon">❌</div><h3>خطأ</h3><p>لم يتم العثور على معرف المستخدم</p><button class="button" onclick="tg.close()">إغلاق</button>`;
+                content.innerHTML = '<div class="error-icon">❌</div><h3>خطأ</h3><p>لم يتم العثور على معرف المستخدم</p><button class="button" onclick="tg.close()">إغلاق</button>';
                 return;
             }
 
             const ip = await getIP();
             const fingerprint = getFingerprint();
-
-            console.log("Fingerprint:", fingerprint);
-            console.log("User ID:", user_id);
-            console.log("IP:", ip);
 
             content.innerHTML = `
                 <div class="ip-box">
@@ -166,7 +153,6 @@
                     })
                 });
                 const result = await response.json();
-                console.log("API Response:", result);
 
                 if (result.status === 'success' && result.verified === true) {
                     content.innerHTML = `
@@ -187,7 +173,6 @@
                     throw new Error(result.message || 'فشل التحقق');
                 }
             } catch (error) {
-                console.error("Error:", error);
                 content.innerHTML = `
                     <div class="error-icon">❌</div>
                     <h3>فشل التحقق</h3>

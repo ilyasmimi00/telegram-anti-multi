@@ -10,7 +10,7 @@ CORS(app)
 
 BOT_USERNAME = "moneybulletbot"
 
-# ========== تخزين مؤقت (بدلاً من قاعدة البيانات) ==========
+# ========== تخزين مؤقت ==========
 users = {}              # user_id -> {fingerprint, ip, timestamp}
 fingerprint_to_user = {}  # fingerprint -> user_id
 ip_to_user = {}           # ip -> set of user_ids
@@ -52,14 +52,14 @@ def verify():
         fingerprint = data.get('fingerprint', 'unknown')
         ip = data.get('ip', 'unknown')
         
-        print(f"📥 Verification request: user_id={user_id}, fingerprint={fingerprint[:20] if fingerprint else 'None'}..., ip={ip}")
+        print(f"📥 Verification: user={user_id}, fp={fingerprint[:20] if fingerprint else 'None'}..., ip={ip}")
         
         if not user_id:
-            return jsonify({"status": "error", "verified": False, "message": "No user_id provided"})
+            return jsonify({"status": "error", "verified": False, "message": "No user_id"})
         
         # ========== نظام منع التعدد ==========
         
-        # 1. التحقق من وجود نفس البصمة لحساب آخر (الأهم)
+        # 1. التحقق من نفس البصمة لحساب آخر
         if fingerprint != 'unknown' and fingerprint in fingerprint_to_user:
             existing_user = fingerprint_to_user[fingerprint]
             if existing_user != user_id:
@@ -70,7 +70,7 @@ def verify():
                     "message": "⚠️ هذا الجهاز مسجل بحساب آخر. لا يمكن إنشاء أكثر من حساب."
                 })
         
-        # 2. التحقق من وجود نفس IP لحساب آخر (إضافي)
+        # 2. التحقق من نفس IP لحساب آخر
         if ip != 'unknown' and ip in ip_to_user:
             if user_id not in ip_to_user[ip] and len(ip_to_user[ip]) >= 1:
                 print(f"🚫 BLOCKED: IP {ip} already used by users {ip_to_user[ip]}")
@@ -80,7 +80,7 @@ def verify():
                     "message": "⚠️ تم اكتشاف أكثر من حساب من نفس عنوان IP. مسموح بحساب واحد فقط."
                 })
         
-        # ========== تسجيل المستخدم الجديد ==========
+        # ========== تسجيل المستخدم ==========
         
         if user_id not in users:
             users[user_id] = {
@@ -88,9 +88,7 @@ def verify():
                 'ip': ip,
                 'timestamp': time.time()
             }
-            print(f"✅ New user registered: {user_id}")
-        else:
-            print(f"ℹ️ Existing user: {user_id}")
+            print(f"✅ New user: {user_id}")
         
         # تسجيل البصمة
         if fingerprint != 'unknown' and fingerprint not in fingerprint_to_user:
@@ -106,7 +104,7 @@ def verify():
         token = secrets.token_urlsafe(32)
         VERIFICATION_TOKENS[token] = {
             'user_id': user_id,
-            'expires': time.time() + 600  # 10 دقائق
+            'expires': time.time() + 600
         }
         
         return jsonify({
@@ -119,8 +117,6 @@ def verify():
         
     except Exception as e:
         print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"status": "error", "verified": False, "message": str(e)})
 
 @app.route('/verify_token/<token>', methods=['GET'])
@@ -135,8 +131,7 @@ def verify_token(token):
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    """إعادة تعيين جميع البيانات (للمشرفين فقط - للأمان)"""
-    # يمكن إضافة رمز سري هنا
+    """إعادة تعيين جميع البيانات"""
     global users, fingerprint_to_user, ip_to_user, VERIFICATION_TOKENS
     users = {}
     fingerprint_to_user = {}
@@ -151,11 +146,11 @@ def home():
         "bot": BOT_USERNAME,
         "message": "Verification API is running",
         "endpoints": [
-            "POST /verify - Send verification data",
-            "GET /check?user_id=xxx - Check user status",
-            "GET /health - Health check",
-            "GET /stats - Statistics",
-            "POST /reset - Reset all data"
+            "POST /verify",
+            "GET /check?user_id=xxx",
+            "GET /health",
+            "GET /stats",
+            "POST /reset"
         ]
     })
 
@@ -163,5 +158,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"🚀 Running on http://localhost:{port}")
     print(f"📱 Bot username: {BOT_USERNAME}")
-    print(f"🔒 Anti-multi account system is ACTIVE")
+    print(f"🔒 Anti-multi account system: ACTIVE")
     app.run(host='0.0.0.0', port=port, debug=False)
